@@ -695,6 +695,9 @@ function app() {
           if (m) { this.selected = m; this.$nextTick(function(){ this.buildCharts(); }.bind(this)); }
         }
         this.data = fresh;
+        if (this.showSummary) {
+          this.$nextTick(function(){ this.buildCpuAllocChart(); }.bind(this));
+        }
         return fresh;
       } catch(e) { console.error(e); }
     },
@@ -736,7 +739,7 @@ function app() {
           datasets: [{ data: vals, backgroundColor: colors.slice(0, groups.length), borderWidth: 0, hoverOffset: 6 }]
         },
         options: {
-          responsive: true, maintainAspectRatio: false, cutout: '68%',
+          responsive: true, maintainAspectRatio: false, cutout: '68%', animation: false,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
@@ -784,7 +787,7 @@ function app() {
         this._rc=new Chart(rc,{
           type:'bar',
           data:{labels:workers.map(function(w){ return w.srv; }),datasets:[{data:vals,backgroundColor:colors,borderRadius:2}]},
-          options:{responsive:true,maintainAspectRatio:false,
+          options:{responsive:true,maintainAspectRatio:false,animation:false,
             plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){ return c.parsed.y+' ms'; }}}},
             scales:{x:{grid:{color:GRID},ticks:{color:TICK,font:{size:9},maxRotation:0}},y:{grid:{color:GRID},ticks:{color:TICK,font:{size:10},callback:function(v){ return v+'ms'; }}}}}
         });
@@ -797,7 +800,7 @@ function app() {
           type:'doughnut',
           data:{labels:['Writing (W)','Keepalive (_)','Idle (.)','Closing (K)','Other'],
             datasets:[{data:[modes.W,modes['_'],modes['.'],modes.K,modes.o],backgroundColor:['#d29922','#58a6ff','#374151','#bc8cff','#484f58'],borderWidth:0,hoverOffset:4}]},
-          options:{responsive:true,maintainAspectRatio:false,
+          options:{responsive:true,maintainAspectRatio:false,animation:false,
             plugins:{legend:{position:'right',labels:{color:'#8b949e',boxWidth:10,padding:8,font:{size:11}}}}}
         });
       }
