@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	apacheStatusURL = "http://127.0.0.1:8081/server-status"
-	nginxStatusURL  = "http://127.0.0.1/nginx_status"
+	apacheStatusURL = ""
+	nginxStatusURL  = ""
 	port            = ":8080"
 	dummyMode       = false
 )
@@ -76,11 +76,15 @@ type VHostGroup struct {
 }
 
 func main() {
-	flag.StringVar(&apacheStatusURL, "apache", apacheStatusURL, "URL Apache server-status")
-	flag.StringVar(&nginxStatusURL, "nginx", nginxStatusURL, "URL Nginx status")
+	flag.StringVar(&apacheStatusURL, "apache", "", "URL Apache server-status (kosongkan untuk auto-detect)")
+	flag.StringVar(&nginxStatusURL, "nginx", "", "URL Nginx status (kosongkan untuk auto-detect)")
 	flag.StringVar(&port, "port", port, "Port Web UI")
 	flag.BoolVar(&dummyMode, "dummy", false, "Gunakan data dummy")
 	flag.Parse()
+
+	if !dummyMode {
+		discoverURLs()
+	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -109,6 +113,57 @@ func main() {
 	}
 	log.Printf("Monitor running at http://127.0.0.1%s [%s]", port, mode)
 	log.Fatal(http.ListenAndServe(port, nil))
+}
+
+func discoverURLs() {
+	client := &http.Client{Timeout: 1 * time.Second}
+
+	if apacheStatusURL == "" {
+		candidates := []string{
+			"http://127.0.0.1:8080/server-status",
+			"http://127.0.0.1:8081/server-status",
+			"http://localhost:8080/server-status",
+			"http://localhost:8081/server-status",
+			"http://127.0.0.1/server-status",
+		}
+		for _, url := range candidates {
+			resp, err := client.Get(url + "?auto")
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					apacheStatusURL = url
+					log.Printf("Auto-discovered Apache status at: %s", url)
+					break
+				}
+			}
+		}
+		if apacheStatusURL == "" {
+			apacheStatusURL = "http://127.0.0.1:8080/server-status" // fallback default
+		}
+	}
+
+	if nginxStatusURL == "" {
+		candidates := []string{
+			"http://127.0.0.1/nginx_status",
+			"http://localhost/nginx_status",
+			"http://127.0.0.1:8081/nginx_status",
+			"http://127.0.0.1:8080/nginx_status",
+		}
+		for _, url := range candidates {
+			resp, err := client.Get(url)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					nginxStatusURL = url
+					log.Printf("Auto-discovered Nginx status at: %s", url)
+					break
+				}
+			}
+		}
+		if nginxStatusURL == "" {
+			nginxStatusURL = "http://127.0.0.1/nginx_status" // fallback default
+		}
+	}
 }
 
 func getDummyData() DashboardData {

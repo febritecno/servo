@@ -1,1 +1,4 @@
-2026/04/14 02:40:12 Monitor running at http://127.0.0.1:8080 [DUMMY]
+2026/04/14 02:46:25 Auto-discovered Apache status at: http://127.0.0.1:8080/server-status
+2026/04/14 02:46:25 Auto-discovered Nginx status at: http://127.0.0.1:8080/nginx_status
+2026/04/14 02:46:25 Monitor running at http://127.0.0.1:8080 [production]
+2026/04/14 02:46:25 listen tcp :8080: bind: address already in use
