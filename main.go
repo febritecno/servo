@@ -1,3 +1,5 @@
+// nohup ./servo --port :8080 > servo.log 2>&1 &
+
 package main
 
 import (
