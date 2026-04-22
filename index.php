@@ -202,14 +202,14 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;
 .subtitle{font-size:.8125rem;color:#8b949e;text-align:center;margin-bottom:1.75rem}
 label{display:block;font-size:.75rem;font-weight:500;color:#8b949e;margin-bottom:.5rem;letter-spacing:.03em;text-transform:uppercase}
 .input-wrap{position:relative;margin-bottom:1.25rem}
-input[type=password]{
+.pwd-input{
   width:100%;padding:.75rem 2.75rem .75rem 1rem;
   background:#0d1117;border:1px solid #30363d;border-radius:.625rem;
   color:#e6edf3;font-size:.9375rem;font-family:'Inter',sans-serif;
   outline:none;transition:border-color .15s,box-shadow .15s;
 }
-input[type=password]:focus{border-color:#58a6ff;box-shadow:0 0 0 3px rgba(88,166,255,.15)}
-input[type=password]::placeholder{color:#484f58}
+.pwd-input:focus{border-color:#58a6ff;box-shadow:0 0 0 3px rgba(88,166,255,.15)}
+.pwd-input::placeholder{color:#484f58}
 .eye-btn{
   position:absolute;right:.875rem;top:50%;transform:translateY(-50%);
   background:none;border:none;cursor:pointer;color:#484f58;padding:0;
@@ -275,7 +275,7 @@ input[type=password]::placeholder{color:#484f58}
     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf) ?>">
     <label for="password">Password</label>
     <div class="input-wrap">
-      <input type="password" id="password" name="password" placeholder="Enter access password"
+      <input type="password" id="password" name="password" class="pwd-input" placeholder="Enter access password"
         autofocus <?= $locked ? 'disabled' : '' ?> required>
       <button type="button" class="eye-btn" onclick="togglePwd()" tabindex="-1">
         <svg id="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -517,6 +517,9 @@ tbody tr{border-bottom:1px solid rgba(48,54,61,.5);transition:background .1s}
 tbody tr:hover{background:var(--bg2)}
 tbody tr:last-child{border-bottom:none}
 tbody td{padding:.4375rem .875rem}
+@media(max-width:1024px){
+  .charts-row{grid-template-columns:1fr;padding:.75rem}
+}
 @media(max-width:768px){
   .hamburger{display:flex}
   .load-label{display:none}
@@ -524,7 +527,7 @@ tbody td{padding:.4375rem .875rem}
   .sidebar{position:fixed;top:52px;left:0;bottom:0;z-index:50;width:82vw;max-width:300px;transform:translateX(-110%)}
   .sidebar.sb-open{transform:translateX(0);box-shadow:8px 0 32px rgba(0,0,0,.5)}
   .sb-backdrop{display:block}
-  .charts-row{grid-template-columns:1fr;padding:.75rem}
+  .charts-row{padding:.75rem}
   .tbl-section{padding:0 .75rem .75rem}
   .det-header{padding:.75rem .75rem .625rem}
   .det-title{font-size:.9rem;gap:.5rem;margin-bottom:.625rem}
@@ -923,7 +926,7 @@ function app() {
           data:{labels:['Writing (W)','Keepalive (_)','Idle (.)','Closing (K)','Other'],
             datasets:[{data:[modes.W,modes['_'],modes['.'],modes.K,modes.o],backgroundColor:['#d29922','#58a6ff','#374151','#bc8cff','#484f58'],borderWidth:0,hoverOffset:4}]},
           options:{responsive:true,maintainAspectRatio:false,animation:false,
-            plugins:{legend:{position:'right',labels:{color:'#8b949e',boxWidth:10,padding:8,font:{size:11}}}}}
+            plugins:{legend:{position: window.innerWidth < 640 ? 'bottom' : 'right',labels:{color:'#8b949e',boxWidth:10,padding:8,font:{size:11}}}}}
         });
       }
     }
