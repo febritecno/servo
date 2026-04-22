@@ -162,15 +162,36 @@ No build step, no dependencies — just drop and run.
 
 ### Install
 
+**Method 1 — One-liner download (Recommended)**
+
 ```bash
-# Copy to your vhost document root
+# Download langsung ke document root vhost
+wget -O /home/user/web/yourdomain.com/public_html/index.php \
+  https://raw.githubusercontent.com/febritecno/servo/main/index.php
+```
+
+Or using `curl`:
+```bash
+curl -fsSL https://raw.githubusercontent.com/febritecno/servo/main/index.php \
+  -o /home/user/web/yourdomain.com/public_html/index.php
+```
+
+**Method 2 — Manual copy** (jika sudah clone repo)
+
+```bash
 cp index.php /home/user/web/yourdomain.com/public_html/index.php
 ```
 
 Then open: `https://yourdomain.com/`
 
-> **Note:** Make sure your domain's `public_html` is NOT publicly accessible  
-> (i.e. restrict via `.htaccess` or IP whitelist — this page shows internal server data).
+> **Default password:** `servo@admin123` — **Ganti setelah install!**
+>
+> Edit baris `SERVO_PASSWORD_HASH` di `index.php`. Generate hash baru dengan:
+> ```bash
+> php -r "echo password_hash('PasswordBaru', PASSWORD_BCRYPT, ['cost'=>12]);"
+> ```
+
+> **Security Note:** Pastikan domain ini tidak dapat diakses publik — gunakan IP whitelist via `.htaccess` atau firewall.
 
 ### PHP Requirements
 
