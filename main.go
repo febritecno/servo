@@ -468,6 +468,15 @@ tbody td{padding:.4375rem .875rem}
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:rgba(0,0,0,.82);backdrop-filter:blur(6px)}
 .modal-overlay[x-cloak]{display:none!important}
 @keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.modal-body{display:flex;flex:1;overflow:hidden;min-height:0}
+.modal-cpu-pane{width:240px;flex-shrink:0;border-right:1px solid #21262d;padding:1rem;display:flex;flex-direction:column;gap:.625rem;overflow-y:auto}
+.modal-tbl-pane{flex:1;overflow-y:auto;overflow-x:auto;min-width:0}
+@media(max-width:640px){
+  .modal-overlay{padding:.5rem}
+  .modal-body{flex-direction:column;overflow-y:auto}
+  .modal-cpu-pane{width:100%;border-right:none;border-bottom:1px solid #21262d;overflow-y:visible}
+  .modal-tbl-pane{flex:none;overflow-x:auto;min-height:200px}
+}
 </style>
 </head>
 <body x-data="app()">
@@ -529,10 +538,10 @@ tbody td{padding:.4375rem .875rem}
     </div>
 
     <!-- 2-Column body: chart left | table right -->
-    <div style="display:flex;flex:1;overflow:hidden;min-height:0">
+    <div class="modal-body">
 
       <!-- LEFT: CPU Chart -->
-      <div style="width:240px;flex-shrink:0;border-right:1px solid #21262d;padding:1rem;display:flex;flex-direction:column;gap:.625rem;overflow-y:auto">
+      <div class="modal-cpu-pane">
         <div style="font-size:.625rem;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.06em">CPU Allocation</div>
         <div style="position:relative;width:100%;height:180px;flex-shrink:0">
           <canvas id="cpuAllocChart"></canvas>
@@ -549,7 +558,7 @@ tbody td{padding:.4375rem .875rem}
       </div>
 
       <!-- RIGHT: scrollable table -->
-      <div style="flex:1;overflow-y:auto;overflow-x:auto;min-width:0">
+      <div class="modal-tbl-pane">
         <table style="width:100%;border-collapse:collapse;font-size:.8rem;white-space:nowrap">
           <thead style="position:sticky;top:0;z-index:5">
             <tr>
@@ -633,7 +642,7 @@ tbody td{padding:.4375rem .875rem}
     </button>
   </div>
   <div class="sb-section" style="padding-top:0;flex:1">
-    <div class="sb-label">VHosts (<span x-text="(data.groups||[]).length"></span>)</div>
+    <div class="sb-label">Active (<span x-text="(data.groups||[]).length"></span>)</div>
     <template x-for="g in (data.groups||[])" :key="g.vhost">
       <div class="vhost-item" :class="selected&&selected.vhost===g.vhost?'active':''" @click="select(g)">
         <div class="vi-header">

@@ -1,7 +1,320 @@
 <?php
 // ============================================================
 // SERVO - Server Monitor Dashboard (PHP Single File Edition)
-// Taruh file ini di /home/user/web/domain/public_html/index.php
+// ============================================================
+
+// ===================== SECURITY CONFIG =====================
+// Change this password hash! Generate with:
+//   php -r "echo password_hash('YourPasswordHere', PASSWORD_BCRYPT, ['cost'=>12]);"
+// Default password: servo@admin123  (CHANGE THIS IN PRODUCTION!)
+define('SERVO_PASSWORD_HASH', '$2y$12$MCnS/DRaXH1iE2iiFp7R6OIwKU/vJ4tlOEoybk2NxAvGGyvMB6SJO');
+
+// Session timeout in seconds (default: 2 hours)
+define('SESSION_TIMEOUT', 7200);
+
+// Max failed attempts before IP lockout
+define('MAX_ATTEMPTS', 5);
+
+// Lockout duration in seconds (default: 15 minutes)
+define('LOCKOUT_DURATION', 900);
+
+// ===================== SECURE SESSION ========================
+ini_set('session.cookie_httponly', 1);
+ini_set('session.cookie_samesite', 'Strict');
+ini_set('session.use_strict_mode', 1);
+ini_set('session.gc_maxlifetime', SESSION_TIMEOUT);
+if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') {
+    ini_set('session.cookie_secure', 1);
+}
+session_name('SERVO_SESSION');
+session_start();
+
+// Security headers
+header('X-Frame-Options: DENY');
+header('X-Content-Type-Options: nosniff');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: no-referrer');
+header('Cache-Control: no-store, no-cache, must-revalidate');
+
+// ===================== BRUTE FORCE PROTECTION ================
+function getClientIP(): string {
+    foreach (['HTTP_CF_CONNECTING_IP','HTTP_X_REAL_IP','HTTP_X_FORWARDED_FOR','REMOTE_ADDR'] as $k) {
+        if (!empty($_SERVER[$k])) {
+            return trim(explode(',', $_SERVER[$k])[0]);
+        }
+    }
+    return '0.0.0.0';
+}
+
+function getLockoutFile(string $ip): string {
+    return sys_get_temp_dir() . '/servo_lockout_' . md5($ip);
+}
+
+function isLockedOut(string $ip): bool {
+    $f = getLockoutFile($ip);
+    if (!file_exists($f)) return false;
+    $data = json_decode(file_get_contents($f), true);
+    if (!$data) return false;
+    if ($data['attempts'] >= MAX_ATTEMPTS) {
+        if (time() - $data['last_attempt'] < LOCKOUT_DURATION) return true;
+        @unlink($f); // lockout expired
+    }
+    return false;
+}
+
+function recordFailedAttempt(string $ip): int {
+    $f = getLockoutFile($ip);
+    $data = file_exists($f) ? (json_decode(file_get_contents($f), true) ?? []) : [];
+    $data['attempts'] = ($data['attempts'] ?? 0) + 1;
+    $data['last_attempt'] = time();
+    file_put_contents($f, json_encode($data));
+    return $data['attempts'];
+}
+
+function clearAttempts(string $ip): void {
+    @unlink(getLockoutFile($ip));
+}
+
+function getRemainingLockout(string $ip): int {
+    $f = getLockoutFile($ip);
+    if (!file_exists($f)) return 0;
+    $data = json_decode(file_get_contents($f), true);
+    return max(0, LOCKOUT_DURATION - (time() - ($data['last_attempt'] ?? 0)));
+}
+
+// ===================== AUTH LOGIC ============================
+$ip         = getClientIP();
+$loginError = '';
+$isLoggedIn = isset($_SESSION['servo_auth']) && $_SESSION['servo_auth'] === true;
+$isTimedOut = false;
+
+// Check session timeout
+if ($isLoggedIn && isset($_SESSION['servo_last_activity'])) {
+    if (time() - $_SESSION['servo_last_activity'] > SESSION_TIMEOUT) {
+        session_unset();
+        session_destroy();
+        session_start();
+        $isLoggedIn = false;
+        $isTimedOut = true;
+    } else {
+        $_SESSION['servo_last_activity'] = time();
+    }
+}
+
+// Handle logout
+if (isset($_GET['logout'])) {
+    session_unset();
+    session_destroy();
+    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+    exit;
+}
+
+// Handle login
+if (!$isLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
+    // CSRF check
+    if (!isset($_POST['csrf_token']) || !isset($_SESSION['csrf_token']) ||
+        !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $loginError = 'Invalid request. Please try again.';
+    } elseif (isLockedOut($ip)) {
+        $remain = ceil(getRemainingLockout($ip) / 60);
+        $loginError = "Too many failed attempts. Try again in {$remain} minute(s).";
+    } else {
+        $input = $_POST['password'] ?? '';
+        // timing-safe comparison using password_verify
+        $valid = strlen($input) > 0 && password_verify($input, SERVO_PASSWORD_HASH);
+        if ($valid) {
+            clearAttempts($ip);
+            session_regenerate_id(true);
+            $_SESSION['servo_auth'] = true;
+            $_SESSION['servo_last_activity'] = time();
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+            exit;
+        } else {
+            $attempts = recordFailedAttempt($ip);
+            $left = MAX_ATTEMPTS - $attempts;
+            if ($left <= 0) {
+                $loginError = 'Too many failed attempts. Account locked for ' . (LOCKOUT_DURATION/60) . ' minutes.';
+            } else {
+                $loginError = "Invalid password. {$left} attempt(s) remaining.";
+            }
+        }
+    }
+}
+
+// Generate CSRF token
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// ===================== GATE: must be logged in ===============
+if (!$isLoggedIn) {
+    // Block API too
+    if (isset($_GET['api'])) {
+        header('HTTP/1.1 401 Unauthorized');
+        header('Content-Type: application/json');
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+    renderLoginPage($loginError, $isTimedOut);
+    exit;
+}
+
+// ===================== LOGIN PAGE RENDERER ===================
+function renderLoginPage(string $error = '', bool $timedOut = false): void {
+    $csrf = $_SESSION['csrf_token'] ?? '';
+    $ip   = getClientIP();
+    $locked = isLockedOut($ip);
+    $remain = $locked ? ceil(getRemainingLockout($ip) / 60) : 0;
+    ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SERVO — Access Required</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#0d1117;color:#e6edf3;font-family:'Inter',sans-serif}
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;
+  background:radial-gradient(ellipse at 60% 20%,rgba(88,166,255,.07) 0%,transparent 60%),
+             radial-gradient(ellipse at 20% 80%,rgba(188,140,255,.05) 0%,transparent 60%),#0d1117}
+.card{
+  width:100%;max-width:400px;padding:2.5rem;
+  background:rgba(22,27,34,.95);
+  border:1px solid rgba(48,54,61,.8);
+  border-radius:1.25rem;
+  box-shadow:0 24px 80px rgba(0,0,0,.6),0 0 0 1px rgba(88,166,255,.04);
+  animation:fadeUp .4s ease;
+}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.logo{display:flex;align-items:center;gap:.75rem;margin-bottom:2rem;justify-content:center}
+.logo-icon{
+  width:44px;height:44px;border-radius:12px;
+  background:linear-gradient(135deg,#58a6ff,#bc8cff);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 20px rgba(88,166,255,.3)
+}
+.logo-text{font-size:1.375rem;font-weight:700;letter-spacing:-.02em}
+.logo-text span{color:#58a6ff}
+.title{font-size:.9375rem;font-weight:600;color:#e6edf3;margin-bottom:.375rem;text-align:center}
+.subtitle{font-size:.8125rem;color:#8b949e;text-align:center;margin-bottom:1.75rem}
+label{display:block;font-size:.75rem;font-weight:500;color:#8b949e;margin-bottom:.5rem;letter-spacing:.03em;text-transform:uppercase}
+.input-wrap{position:relative;margin-bottom:1.25rem}
+input[type=password]{
+  width:100%;padding:.75rem 2.75rem .75rem 1rem;
+  background:#0d1117;border:1px solid #30363d;border-radius:.625rem;
+  color:#e6edf3;font-size:.9375rem;font-family:'Inter',sans-serif;
+  outline:none;transition:border-color .15s,box-shadow .15s;
+}
+input[type=password]:focus{border-color:#58a6ff;box-shadow:0 0 0 3px rgba(88,166,255,.15)}
+input[type=password]::placeholder{color:#484f58}
+.eye-btn{
+  position:absolute;right:.875rem;top:50%;transform:translateY(-50%);
+  background:none;border:none;cursor:pointer;color:#484f58;padding:0;
+  display:flex;transition:color .15s
+}
+.eye-btn:hover{color:#8b949e}
+.btn{
+  width:100%;padding:.8125rem;border:none;border-radius:.625rem;
+  background:linear-gradient(135deg,#1f6feb,#388bfd);
+  color:#fff;font-size:.9375rem;font-weight:600;cursor:pointer;
+  transition:filter .15s,transform .1s;letter-spacing:.01em;
+  box-shadow:0 4px 15px rgba(31,111,235,.35)
+}
+.btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.alert{
+  padding:.75rem 1rem;border-radius:.5rem;font-size:.8125rem;
+  margin-bottom:1.25rem;display:flex;align-items:flex-start;gap:.625rem;
+}
+.alert-error{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#f85149}
+.alert-warn{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.25);color:#d29922}
+.alert-info{background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.2);color:#58a6ff}
+.footer{margin-top:1.5rem;text-align:center;font-size:.6875rem;color:#484f58}
+.shield{display:flex;align-items:center;justify-content:center;gap:.375rem;margin-top:.5rem;font-size:.625rem;color:#484f58}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+    </div>
+    <div class="logo-text"><span>SERVO</span></div>
+  </div>
+
+  <div class="title">Access Required</div>
+  <div class="subtitle">Server Monitor Dashboard — Authentication</div>
+
+  <?php if ($timedOut): ?>
+  <div class="alert alert-warn">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    Session expired due to inactivity. Please sign in again.
+  </div>
+  <?php endif; ?>
+
+  <?php if ($locked): ?>
+  <div class="alert alert-error">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;margin-top:1px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    Access locked. Try again in <?= $remain ?> minute(s).
+  </div>
+  <?php elseif ($error): ?>
+  <div class="alert alert-error">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <?= htmlspecialchars($error) ?>
+  </div>
+  <?php endif; ?>
+
+  <form method="POST" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf) ?>">
+    <label for="password">Password</label>
+    <div class="input-wrap">
+      <input type="password" id="password" name="password" placeholder="Enter access password"
+        autofocus <?= $locked ? 'disabled' : '' ?> required>
+      <button type="button" class="eye-btn" onclick="togglePwd()" tabindex="-1">
+        <svg id="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+    </div>
+    <button type="submit" class="btn" <?= $locked ? 'disabled' : '' ?>>
+      Sign In to Dashboard
+    </button>
+  </form>
+
+  <div class="footer">
+    <div class="shield">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      Protected · Brute-force lockout active · Session expires after 2h
+    </div>
+  </div>
+</div>
+<script>
+function togglePwd() {
+  var inp = document.getElementById('password');
+  var ico = document.getElementById('eye-icon');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    ico.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+  } else {
+    inp.type = 'password';
+    ico.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  }
+}
+</script>
+</body>
+</html>
+    <?php
+}
+
+// ============================================================
+// SERVO - Server Monitor Dashboard (PHP Single File Edition)
 // ============================================================
 
 // ---- CONFIG AUTO DISCOVERY ----
@@ -173,9 +486,21 @@ body{background:var(--bg0);color:var(--t1);font-family:'Inter',sans-serif;displa
 .load-val{color:#ff79c6;font-weight:600;font-family:'JetBrains Mono',monospace}
 .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(63,185,80,.4)}50%{opacity:.7;box-shadow:0 0 0 5px rgba(63,185,80,0)}}
-.layout{display:flex;flex:1;overflow:hidden}
-.sidebar{width:268px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
+.layout{display:flex;flex:1;overflow:hidden;position:relative}
+.sidebar{width:268px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto;transition:transform .25s cubic-bezier(.4,0,.2,1)}
 .sidebar::-webkit-scrollbar{width:4px}
+.hamburger{display:none;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid var(--border);border-radius:.5rem;background:var(--bg2);cursor:pointer;color:var(--t2);transition:all .15s;flex-shrink:0}
+.hamburger:hover{background:var(--bg3);color:var(--t1)}
+.sb-backdrop{display:none;position:fixed;inset:0;z-index:49;background:rgba(0,0,0,.6);backdrop-filter:blur(2px)}
+@media(max-width:768px){
+  .hamburger{display:flex}
+  .load-label{display:none}
+  .sidebar{position:fixed;top:52px;left:0;bottom:0;z-index:50;width:80vw;max-width:300px;transform:translateX(-110%)}
+  .sidebar.sb-open{transform:translateX(0);box-shadow:8px 0 32px rgba(0,0,0,.5)}
+  .sb-backdrop{display:block}
+  .charts-row{grid-template-columns:1fr}
+  .ov-grid{grid-template-columns:1fr}
+}
 .sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .sb-section{padding:.875rem 1rem}
 .sb-label{font-size:.625rem;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;padding:.5rem 0}
@@ -232,6 +557,15 @@ tbody td{padding:.4375rem .875rem}
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:rgba(0,0,0,.82);backdrop-filter:blur(6px)}
 .modal-overlay[x-cloak]{display:none!important}
 @keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.modal-body{display:flex;flex:1;overflow:hidden;min-height:0}
+.modal-cpu-pane{width:240px;flex-shrink:0;border-right:1px solid #21262d;padding:1rem;display:flex;flex-direction:column;gap:.625rem;overflow-y:auto}
+.modal-tbl-pane{flex:1;overflow-y:auto;overflow-x:auto;min-width:0}
+@media(max-width:640px){
+  .modal-overlay{padding:.5rem}
+  .modal-body{flex-direction:column;overflow-y:auto}
+  .modal-cpu-pane{width:100%;border-right:none;border-bottom:1px solid #21262d;overflow-y:visible}
+  .modal-tbl-pane{flex:none;overflow-x:auto;min-height:200px}
+}
 </style>
 </head>
 <body x-data="app()">
@@ -266,9 +600,9 @@ tbody td{padding:.4375rem .875rem}
       <div style="background:#161b22;border:1px solid #21262d;border-radius:.5rem;padding:.4rem .75rem;text-align:center"><div style="font-size:.55rem;color:#8b949e;text-transform:uppercase;letter-spacing:.06em">Uptime</div><div style="font-size:1.1rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#8b949e" x-text="data.apache_summary&&data.apache_summary.uptime||'—'"></div></div>
     </div>
     <!-- 2-column body -->
-    <div style="display:flex;flex:1;overflow:hidden;min-height:0">
+    <div class="modal-body">
       <!-- LEFT chart -->
-      <div style="width:240px;flex-shrink:0;border-right:1px solid #21262d;padding:1rem;display:flex;flex-direction:column;gap:.625rem;overflow-y:auto">
+      <div class="modal-cpu-pane">
         <div style="font-size:.625rem;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.06em">CPU Allocation</div>
         <div style="position:relative;width:100%;height:180px;flex-shrink:0"><canvas id="cpuAllocChart"></canvas></div>
         <div style="display:flex;flex-direction:column;gap:.3rem">
@@ -282,7 +616,7 @@ tbody td{padding:.4375rem .875rem}
         </div>
       </div>
       <!-- RIGHT table -->
-      <div style="flex:1;overflow-y:auto;overflow-x:auto;min-width:0">
+      <div class="modal-tbl-pane">
         <table style="width:100%;border-collapse:collapse;font-size:.8rem;white-space:nowrap">
           <thead style="position:sticky;top:0;z-index:5">
             <tr>
@@ -324,16 +658,29 @@ tbody td{padding:.4375rem .875rem}
 </template>
 
 <div class="topbar">
-  <div class="topbar-logo"><span>SERVO</span></div>
+  <div class="topbar-logo">
+    <button class="hamburger" @click="sidebarOpen=!sidebarOpen" :aria-expanded="sidebarOpen" aria-label="Toggle menu">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <span>SERVO</span>
+  </div>
   <div class="topbar-right">
     <span x-show="downCount()>0" style="background:rgba(248,81,73,.12);color:#f85149;padding:3px 10px;border-radius:999px;font-weight:600;font-size:.7rem" x-text="downCount()+' Critical'"></span>
-    <span>Load Avg: <span class="load-val" x-text="data.load_avg||'—'"></span></span>
+    <span class="load-label">Load Avg: <span class="load-val" x-text="data.load_avg||'—'"></span></span>
     <div style="display:flex;align-items:center;gap:6px"><div class="pulse"></div><span>Live · 3s</span></div>
+    <a href="?logout=1" style="display:inline-flex;align-items:center;gap:5px;font-size:.75rem;color:#8b949e;text-decoration:none;padding:4px 10px;border:1px solid rgba(48,54,61,.6);border-radius:6px;transition:all .15s" onmouseover="this.style.color='#f85149';this.style.borderColor='rgba(248,81,73,.4)'" onmouseout="this.style.color='#8b949e';this.style.borderColor='rgba(48,54,61,.6)'" onclick="return confirm('Sign out from SERVO?')">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Logout
+    </a>
   </div>
 </div>
 
 <div class="layout">
-<aside class="sidebar">
+<!-- Mobile backdrop -->
+<div class="sb-backdrop" x-show="sidebarOpen" x-cloak style="display:none" @click="sidebarOpen=false"></div>
+<aside class="sidebar" :class="sidebarOpen?'sb-open':''">
   <div class="sb-section">
     <div class="sb-label">System</div>
     <div class="sb-sys-card">
@@ -355,9 +702,9 @@ tbody td{padding:.4375rem .875rem}
     </button>
   </div>
   <div class="sb-section" style="padding-top:0;flex:1">
-    <div class="sb-label">VHosts (<span x-text="(data.groups||[]).length"></span>)</div>
+    <div class="sb-label">Active (<span x-text="(data.groups||[]).length"></span>)</div>
     <template x-for="g in (data.groups||[])" :key="g.vhost">
-      <div class="vhost-item" :class="selected&&selected.vhost===g.vhost?'active':''" @click="select(g)">
+      <div class="vhost-item" :class="selected&&selected.vhost===g.vhost?'active':''" @click="select(g); if(window.innerWidth<769) sidebarOpen=false">
         <div class="vi-header">
           <div class="sdot" :style="'background:'+healthColor(g)"></div>
           <div class="vi-name" x-text="g.vhost"></div>
@@ -452,7 +799,7 @@ tbody td{padding:.4375rem .875rem}
 <script>
 function app() {
   return {
-    data: {}, selected: null, _rc: null, _mc: null, showSummary: false, _cpuAlloc: null,
+    data: {}, selected: null, _rc: null, _mc: null, showSummary: false, _cpuAlloc: null, sidebarOpen: window.innerWidth >= 769,
     init() {
       this.loadData().then(function(){
         if (!this.selected && this.data.groups && this.data.groups.length) {
