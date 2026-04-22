@@ -401,9 +401,12 @@ body{background:var(--bg0);color:var(--t1);font-family:'Inter',sans-serif;displa
 .load-val{color:#ff79c6;font-weight:600;font-family:'JetBrains Mono',monospace}
 .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(63,185,80,.4)}50%{opacity:.7;box-shadow:0 0 0 5px rgba(63,185,80,0)}}
-.layout{display:flex;flex:1;overflow:hidden}
-.sidebar{width:268px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
+.layout{display:flex;flex:1;overflow:hidden;position:relative;min-height:0}
+.sidebar{width:268px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto;transition:transform .25s cubic-bezier(.4,0,.2,1)}
 .sidebar::-webkit-scrollbar{width:4px}
+.hamburger{display:none;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid var(--border);border-radius:.5rem;background:var(--bg2);cursor:pointer;color:var(--t2);transition:all .15s;flex-shrink:0}
+.hamburger:hover{background:var(--bg3);color:var(--t1)}
+.sb-backdrop{display:none;position:fixed;inset:0;z-index:49;background:rgba(0,0,0,.6);backdrop-filter:blur(2px)}
 .sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .sb-section{padding:.875rem 1rem}
 .sb-label{font-size:.625rem;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;padding:.5rem 0}
@@ -471,11 +474,22 @@ tbody td{padding:.4375rem .875rem}
 .modal-body{display:flex;flex:1;overflow:hidden;min-height:0}
 .modal-cpu-pane{width:240px;flex-shrink:0;border-right:1px solid #21262d;padding:1rem;display:flex;flex-direction:column;gap:.625rem;overflow-y:auto}
 .modal-tbl-pane{flex:1;overflow-y:auto;overflow-x:auto;min-width:0}
-@media(max-width:768px){
+@media(max-width:1024px){
   .charts-row{grid-template-columns:1fr;padding:.75rem}
+}
+@media(max-width:768px){
+  .hamburger{display:flex}
+  .load-label{display:none}
+  .topbar-right{gap:.5rem}
+  .sidebar{position:fixed;top:52px;left:0;bottom:0;z-index:50;width:82vw;max-width:300px;transform:translateX(-110%)}
+  .sidebar.sb-open{transform:translateX(0);box-shadow:8px 0 32px rgba(0,0,0,.5)}
+  .sb-backdrop{display:block}
   .ov-grid{grid-template-columns:1fr}
-  .det-header{padding:1rem}
-  .tbl-section{padding:0 1rem 1rem}
+  .det-header{padding:.75rem .75rem .625rem}
+  .det-title{font-size:.9rem;gap:.5rem;margin-bottom:.625rem}
+  .stat-chip{min-width:70px;padding:.35rem .625rem}
+  .stat-val{font-size:.875rem}
+  .tbl-section{padding:0 .75rem .75rem}
 }
 @media(max-width:640px){
   .modal-overlay{padding:.5rem}
@@ -610,17 +624,26 @@ tbody td{padding:.4375rem .875rem}
 </div>
 </template>
 <div class="topbar">
-  <div class="topbar-logo"><span>SERVO</span></div>
+  <div class="topbar-logo">
+    <button class="hamburger" @click="sidebarOpen=!sidebarOpen" :aria-expanded="sidebarOpen" aria-label="Toggle menu">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <span>SERVO</span>
+  </div>
   <div class="topbar-right">
     <span x-show="downCount()>0" style="background:rgba(248,81,73,.12);color:#f85149;padding:3px 10px;border-radius:999px;font-weight:600;font-size:.7rem" x-text="downCount()+' Critical'"></span>
-    <span>Load Avg: <span class="load-val" x-text="data.load_avg||'—'"></span></span>
+    <span class="load-label">Load Avg: <span class="load-val" x-text="data.load_avg||'—'"></span></span>
     <div style="display:flex;align-items:center;gap:6px"><div class="pulse"></div><span>Live · 3s</span></div>
   </div>
 </div>
 <div class="layout">
 
 <!-- SIDEBAR -->
-<aside class="sidebar">
+<!-- Mobile backdrop -->
+<div class="sb-backdrop" x-show="sidebarOpen" x-cloak style="display:none" @click="sidebarOpen=false"></div>
+<aside class="sidebar" :class="sidebarOpen?'sb-open':''">
   <div class="sb-section">
     <div class="sb-label">System</div>
     <div class="sb-sys-card">
@@ -650,7 +673,7 @@ tbody td{padding:.4375rem .875rem}
   <div class="sb-section" style="padding-top:0;flex:1">
     <div class="sb-label">Active (<span x-text="(data.groups||[]).length"></span>)</div>
     <template x-for="g in (data.groups||[])" :key="g.vhost">
-      <div class="vhost-item" :class="selected&&selected.vhost===g.vhost?'active':''" @click="select(g)">
+      <div class="vhost-item" :class="selected&&selected.vhost===g.vhost?'active':''" @click="select(g); if(window.innerWidth<769) sidebarOpen=false">
         <div class="vi-header">
           <div class="sdot" :style="'background:'+healthColor(g)"></div>
           <div class="vi-name" x-text="g.vhost"></div>
@@ -748,7 +771,7 @@ tbody td{padding:.4375rem .875rem}
 <script>
 function app() {
   return {
-    data: {}, selected: null, _rc: null, _mc: null, showSummary: false, _cpuAlloc: null,
+    data: {}, selected: null, _rc: null, _mc: null, showSummary: false, _cpuAlloc: null, sidebarOpen: window.innerWidth >= 769,
     init() {
       this.loadData().then(function(){
         if (!this.selected && this.data.groups && this.data.groups.length) {
@@ -873,7 +896,7 @@ function app() {
           data:{labels:['Writing (W)','Keepalive (_)','Idle (.)','Closing (K)','Other'],
             datasets:[{data:[modes.W,modes['_'],modes['.'],modes.K,modes.o],backgroundColor:['#d29922','#58a6ff','#374151','#bc8cff','#484f58'],borderWidth:0,hoverOffset:4}]},
           options:{responsive:true,maintainAspectRatio:false,animation:false,
-            plugins:{legend:{position:'right',labels:{color:'#8b949e',boxWidth:10,padding:8,font:{size:11}}}}}
+            plugins:{legend:{position: window.innerWidth < 640 ? 'bottom' : 'right',labels:{color:'#8b949e',boxWidth:10,padding:8,font:{size:11}}}}}
         });
       }
     }
